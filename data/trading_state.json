@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "state": {
+    "asset": "Bitcoin",
+    "strategy_type": "EMA Crossover",
+    "capital": 100,
+    "capital_currency": "USDT",
+    "risk_percentage": 1.0,
+    "risk_amount": null,
+    "entry_price": 70000.0,
+    "stop_loss": 69000.0,
+    "price_currency": "USD",
+    "backtest_period": "one week",
+    "entry_condition": "9 EMA crosses above 15 EMA",
+    "exit_condition": "9 EMA crosses below 15 EMA"
+  }
+}
