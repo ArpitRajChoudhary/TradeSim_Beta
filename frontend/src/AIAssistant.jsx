@@ -13,10 +13,13 @@ import {
   TrendingUp,
   Activity,
   Info,
+  Maximize2,
+  X,
 } from 'lucide-react'
 import './AIAssistant.css'
 
-const API_URL = 'http://127.0.0.1:8000'
+
+const API_URL = ''
 
 const initialMessage = {
   role: 'assistant',
@@ -228,7 +231,279 @@ function BacktestPreparationCard({ config, defaults, onConfirm, loading }) {
 
 // BACKTEST EXECUTION AND REPORT
 
-function BacktestReportCard({ job }) {
+
+// FORMAT BACKTEST TIMESTAMPS
+function formatTradeTime(timestamp) {
+  if (timestamp === null || timestamp === undefined) return '—'
+
+  const value = Number(timestamp)
+  if (!Number.isFinite(value)) return '—'
+
+  // Support Unix timestamps in either seconds or milliseconds.
+  const date = new Date(value < 1e12 ? value * 1000 : value)
+
+  if (Number.isNaN(date.getTime())) return '—'
+
+  return date.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+// EQUITY CURVE
+function EquityCurve({ equityCurve = [], trades = [], expanded = false }) {
+  const points = equityCurve
+    .map((point) => ({
+      time: Number(point.time),
+      equity: Number(point.equity),
+    }))
+    .filter(
+      (point) =>
+        Number.isFinite(point.time) &&
+        Number.isFinite(point.equity)
+    )
+
+  if (points.length < 2) {
+    return (
+      <div className="ai-chart-empty">
+        Not enough equity data to display the chart.
+      </div>
+    )
+  }
+
+  const width = expanded ? 1400 : 1100
+  const height = expanded ? 560 : 380
+  const padding = { top: 20, right: 24, bottom: 38, left: 76 }
+
+  const values = points.map((point) => point.equity)
+  const minimum = Math.min(...values)
+  const maximum = Math.max(...values)
+  const range = maximum - minimum || 1
+
+  const chartWidth = width - padding.left - padding.right
+  const chartHeight = height - padding.top - padding.bottom
+
+  const getX = (index) =>
+    padding.left + (index / (points.length - 1)) * chartWidth
+
+  const getY = (value) =>
+    padding.top +
+    ((maximum - value) / range) * chartHeight
+
+  const coordinates = points.map((point, index) => ({
+    x: getX(index),
+    y: getY(point.equity),
+  }))
+
+  const linePoints = coordinates
+    .map((point) => `${point.x},${point.y}`)
+    .join(' ')
+
+  const markers = trades.flatMap((trade, tradeIndex) => {
+    const events = [
+      { type: 'Entry', time: Number(trade.entry_time) },
+      { type: 'Exit', time: Number(trade.exit_time) },
+    ]
+
+    return events
+      .filter((event) => Number.isFinite(event.time))
+      .map((event) => {
+        let nearestIndex = 0
+        let smallestDifference = Infinity
+
+        points.forEach((point, index) => {
+          const difference = Math.abs(point.time - event.time)
+
+          if (difference < smallestDifference) {
+            smallestDifference = difference
+            nearestIndex = index
+          }
+        })
+
+        return {
+          ...event,
+          tradeIndex,
+          ...coordinates[nearestIndex],
+        }
+      })
+  })
+
+  const labelIndexes = [
+    0,
+    Math.floor((points.length - 1) / 2),
+    points.length - 1,
+  ]
+
+  return (
+    <div className="ai-equity-chart">
+      <div className="ai-chart-legend">
+        <span>
+          <i className="ai-legend-line" />
+          Portfolio equity
+        </span>
+        <span>
+          <i className="ai-legend-entry" />
+          Entry
+        </span>
+        <span>
+          <i className="ai-legend-exit" />
+          Exit
+        </span>
+      </div>
+
+      <div className="ai-chart-scroll">
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          role="img"
+          aria-label="Backtest portfolio equity curve with trade entry and exit markers"
+          className="ai-equity-svg"
+        >
+          {[0, 0.25, 0.5, 0.75, 1].map((fraction) => {
+            const y = padding.top + fraction * chartHeight
+            const value = maximum - fraction * range
+
+            return (
+              <g key={fraction}>
+                <line
+                  x1={padding.left}
+                  y1={y}
+                  x2={width - padding.right}
+                  y2={y}
+                  className="ai-chart-gridline"
+                />
+                <text
+                  x={padding.left - 10}
+                  y={y + 4}
+                  textAnchor="end"
+                  className="ai-chart-label"
+                >
+                  {formatNumber(value, 0)}
+                </text>
+              </g>
+            )
+          })}
+
+          <polyline
+            points={linePoints}
+            fill="none"
+            className="ai-equity-line"
+            strokeWidth="2.5"
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+
+          {markers.map((marker, index) => (
+            <circle
+              key={`${marker.tradeIndex}-${marker.type}-${index}`}
+              cx={marker.x}
+              cy={marker.y}
+              r="4"
+              className={
+                marker.type === 'Entry'
+                  ? 'ai-chart-entry-marker'
+                  : 'ai-chart-exit-marker'
+              }
+            >
+              <title>
+                {marker.type} — Trade {marker.tradeIndex + 1}
+              </title>
+            </circle>
+          ))}
+
+          {labelIndexes.map((index, labelIndex) => (
+            <text
+              key={labelIndex}
+              x={getX(index)}
+              y={height - 10}
+              textAnchor={
+                labelIndex === 0
+                  ? 'start'
+                  : labelIndex === 2
+                    ? 'end'
+                    : 'middle'
+              }
+              className="ai-chart-label"
+            >
+              {formatTradeTime(points[index].time)}
+            </text>
+          ))}
+        </svg>
+      </div>
+
+      <div className="ai-chart-footer">
+        <span>Starting equity: {formatNumber(points[0].equity)} USDT</span>
+        <span>Ending equity: {formatNumber(points[points.length - 1].equity)} USDT</span>
+      </div>
+    </div>
+  )
+}
+
+// TRADE HISTORY
+function TradeHistory({ trades = [] }) {
+  if (!trades.length) {
+    return (
+      <div className="ai-chart-empty">
+        No closed trades were recorded during this backtest.
+      </div>
+    )
+  }
+
+  return (
+    <div className="ai-trade-table-wrapper">
+      <table className="ai-trade-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Entry time</th>
+            <th>Exit time</th>
+            <th>Entry price</th>
+            <th>Exit price</th>
+            <th>Quantity</th>
+            <th>Net P&amp;L</th>
+            <th>Return</th>
+            <th>Exit reason</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {trades.map((trade, index) => {
+            const pnl = Number(trade.net_pnl)
+            const positive = Number.isFinite(pnl) && pnl >= 0
+
+            return (
+              <tr key={`${trade.entry_time}-${index}`}>
+                <td>{index + 1}</td>
+                <td>{formatTradeTime(trade.entry_time)}</td>
+                <td>{formatTradeTime(trade.exit_time)}</td>
+                <td>{formatNumber(trade.entry_price, 4)}</td>
+                <td>{formatNumber(trade.exit_price, 4)}</td>
+                <td>{formatNumber(trade.quantity, 6)}</td>
+                <td className={positive ? 'passed' : 'ai-loss-value'}>
+                  {positive ? '+' : ''}
+                  {formatNumber(trade.net_pnl, 4)} USDT
+                </td>
+                <td className={positive ? 'passed' : 'ai-loss-value'}>
+                  {positive ? '+' : ''}
+                  {formatNumber(trade.return_percentage, 4)}%
+                </td>
+                <td>{trade.exit_reason || '—'}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// BACKTEST EXECUTION AND REPORT
+
+export function BacktestReportCard({ job }) {
+  const [chartExpanded, setChartExpanded] = useState(false)
+
   if (!job) return null
 
   if (job.status === 'queued' || job.status === 'running') {
@@ -355,6 +630,75 @@ function BacktestReportCard({ job }) {
         </div>
       </div>
 
+      <div className="ai-report-section">
+        <div className="ai-report-section-heading">
+          <div>
+            <h4>Portfolio performance</h4>
+            <span>Equity over time</span>
+          </div>
+
+          <button
+            type="button"
+            className="ai-chart-expand-button"
+            onClick={() => setChartExpanded(true)}
+          >
+            <Maximize2 size={15} />
+            Expand chart
+          </button>
+        </div>
+
+        <EquityCurve
+          equityCurve={result.equity_curve}
+          trades={result.trades}
+        />
+        {chartExpanded && (
+          <div
+            className="ai-chart-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Expanded portfolio equity chart"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) {
+                setChartExpanded(false)
+              }
+            }}
+          >
+            <div className="ai-chart-modal-content">
+              <div className="ai-chart-modal-header">
+                <div>
+                  <h3>Portfolio equity curve</h3>
+                  <p>Full-size backtest performance chart</p>
+                </div>
+          
+                <button
+                  type="button"
+                  className="ai-chart-close-button"
+                  onClick={() => setChartExpanded(false)}
+                  aria-label="Close expanded chart"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+          
+              <EquityCurve
+                equityCurve={result.equity_curve}
+                trades={result.trades}
+                expanded
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="ai-report-section">
+        <div className="ai-report-section-heading">
+          <h4>Trade history</h4>
+          <span>{result.trades?.length || 0} closed trades</span>
+        </div>
+
+        <TradeHistory trades={result.trades} />
+      </div>
+
       {result.open_position && (
         <div className="ai-result-note" style={{ marginTop: 14 }}>
           <Info size={15} />
@@ -431,14 +775,15 @@ function AssistantMessage({ message }) {
 
 // MAIN AI ASSISTANT
 
-function AIAssistant() {
+function AIAssistant({ user }) {
+  const sessionStorageKey = `tradesim_ai_session_${user.id}`
   const [messages, setMessages] = useState([initialMessage])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
 
   const [sessionId, setSessionId] = useState(
-    () => sessionStorage.getItem('tradesim_ai_session') || null
-  )
+  () => sessionStorage.getItem(sessionStorageKey) || null
+)
 
   const [apiError, setApiError] = useState('')
 
@@ -447,6 +792,8 @@ function AIAssistant() {
   const [backtestDefaults, setBacktestDefaults] = useState([])
   const [backtestJob, setBacktestJob] = useState(null)
   const [backtestStarting, setBacktestStarting] = useState(false)
+  const [backtestMode, setBacktestMode] = useState(false)
+  const [backtestPrompt, setBacktestPrompt] = useState('')
 
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
@@ -460,6 +807,7 @@ function AIAssistant() {
   async function prepareBacktest(prompt) {
     const response = await fetch(`${API_URL}/api/backtests/prepare`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json',
@@ -517,6 +865,7 @@ function AIAssistant() {
     try {
       const response = await fetch(`${API_URL}/api/backtests/start`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
@@ -536,6 +885,8 @@ function AIAssistant() {
 
       setBacktestJob(data.job)
       setBacktestConfig(null)
+      setBacktestMode(false)
+      setBacktestPrompt('')
 
       setMessages((previous) => [
         ...previous,
@@ -568,7 +919,10 @@ function AIAssistant() {
     async function checkStatus() {
       try {
         const response = await fetch(
-          `${API_URL}/api/backtests/${encodeURIComponent(runId)}`
+          `${API_URL}/api/backtests/${encodeURIComponent(runId)}`,
+          {
+            credentials: 'include',
+          }
         )
 
         if (!response.ok) {
@@ -614,13 +968,29 @@ function AIAssistant() {
       { role: 'user', text: message },
     ])
 
-    // Backtest requests use the dedicated backtest API.
-    const isBacktestRequest =
-      /\b(backtest|back-testing|back testing|historical test)\b/i.test(message)
+    
+  // Detect explicit requests to explain without backtesting.
+  const explicitlyNoBacktest =
+    /\b(do not|don't|dont|without|no)\b.{0,50}\b(backtest|back-testing|back testing|historical test)\b/i.test(message)
 
-    if (isBacktestRequest) {
+  // Detect explicit backtest requests.
+  const startsBacktest =
+    /\b(backtest|back-testing|back testing|historical test)\b/i.test(message)
+
+  // A new explanation-only request must not enter the backtest workflow.
+  const shouldUseBacktest =
+    !explicitlyNoBacktest && (backtestMode || startsBacktest)
+
+    if (shouldUseBacktest) {
+      const updatedPrompt = backtestMode
+        ? `${backtestPrompt}\nUser: ${message}`
+        : message
+
+      setBacktestMode(true)
+      setBacktestPrompt(updatedPrompt)
+
       try {
-        await prepareBacktest(message)
+        await prepareBacktest(updatedPrompt)
       } catch (error) {
         setMessages((previous) => [
           ...previous,
@@ -639,12 +1009,12 @@ function AIAssistant() {
 
       return
     }
-
     // Existing AI chat and position sizing flow.
 
     try {
       const response = await fetch(`${API_URL}/api/ai/chat`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
@@ -667,7 +1037,7 @@ function AIAssistant() {
 
       if (data.session_id) {
         setSessionId(data.session_id)
-        sessionStorage.setItem('tradesim_ai_session', data.session_id)
+        sessionStorage.setItem(sessionStorageKey, data.session_id)
       }
 
       setMessages((previous) => [
@@ -710,14 +1080,17 @@ function AIAssistant() {
       if (sessionId) {
         await fetch(
           `${API_URL}/api/ai/reset/${encodeURIComponent(sessionId)}`,
-          { method: 'POST' }
+          {
+            method: 'POST',
+            credentials: 'include',
+          }
         )
       }
     } catch {
       // A new local conversation can still begin if reset fails.
     }
 
-    sessionStorage.removeItem('tradesim_ai_session')
+    sessionStorage.removeItem(sessionStorageKey)
 
     setSessionId(null)
     setMessages([initialMessage])
@@ -727,6 +1100,8 @@ function AIAssistant() {
     setBacktestConfig(null)
     setBacktestDefaults([])
     setBacktestJob(null)
+    setBacktestMode(false)
+    setBacktestPrompt('')
 
     inputRef.current?.focus()
   }
@@ -811,14 +1186,13 @@ function AIAssistant() {
           )}
 
           {backtestJob && (
-            <div className="ai-message assistant">
+            <div className="ai-message assistant ai-report-message">
               <div className="ai-message-avatar">
                 <Bot size={17} />
               </div>
 
-              <div className="ai-message-content">
+              <div className="ai-message-content ai-report-message-content">
                 <div className="ai-message-author">TradeSim AI</div>
-
                 <BacktestReportCard job={backtestJob} />
               </div>
             </div>

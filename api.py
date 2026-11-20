@@ -3,7 +3,14 @@ import os
 from decimal import Decimal
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    Cookie,
+    Depends,
+    Response,
+)
+import auth
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from ai_backtest import (
@@ -15,6 +22,7 @@ from ai_backtest import (
 from backtest_jobs import (
     start_backtest,
     get_backtest,
+    get_all_backtests,
 )
 
 from ai_service import (
@@ -99,7 +107,8 @@ class AIChatRequest(BaseModel):
     session_id: str | None = None
 class BacktestPrepareRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=5000)
-
+class GoogleLoginRequest(BaseModel):
+    credential: str = Field(min_length=1)
 
 class BacktestStartRequest(BaseModel):
     config: dict
@@ -121,10 +130,108 @@ def health_check():
         "status": "healthy",
         "service": "TradeSim API",
     }
+# --------------------------------------------------
+# AUTHENTICATION
+# --------------------------------------------------
 
+def get_current_user(
+    tradesim_session: str | None = Cookie(
+        default=None,
+        alias=auth.SESSION_COOKIE_NAME,
+    ),
+):
+    if not tradesim_session:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required.",
+        )
+
+    user = auth.verify_session_token(tradesim_session)
+
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Session expired or invalid. Please sign in again.",
+        )
+
+    return user
+
+
+@app.post("/api/auth/google")
+def google_login(
+    request: GoogleLoginRequest,
+    response: Response,
+):
+    try:
+        google_user = auth.verify_google_token(
+            request.credential
+        )
+
+        user = auth.get_or_create_user(google_user)
+
+        session_token = auth.create_session_token(
+            user["id"]
+        )
+
+        response.set_cookie(
+            key=auth.SESSION_COOKIE_NAME,
+            value=session_token,
+            max_age=auth.SESSION_MAX_AGE,
+            httponly=True,
+            secure=False,
+            samesite="lax",
+            path="/",
+        )
+
+        return {
+            "success": True,
+            "user": user,
+        }
+
+    except ValueError as error:
+        raise HTTPException(
+            status_code=401,
+            detail=str(error),
+        ) from error
+
+    except RuntimeError as error:
+        raise HTTPException(
+            status_code=500,
+            detail=str(error),
+        ) from error
+
+
+@app.get("/api/auth/me")
+def current_user(
+    user: dict = Depends(get_current_user),
+):
+    return {
+        "authenticated": True,
+        "user": user,
+    }
+
+
+@app.post("/api/auth/logout")
+def logout(response: Response):
+
+    response.delete_cookie(
+        key=auth.SESSION_COOKIE_NAME,
+        path="/",
+        httponly=True,
+        secure=False,
+        samesite="lax",
+    )
+
+    return {
+        "success": True,
+        "message": "Logged out successfully.",
+    }
 
 @app.post("/api/calculator/position-size")
-def calculate_position_size(request: PositionSizeRequest):
+def calculate_position_size(
+    request: PositionSizeRequest,
+    user: dict = Depends(get_current_user),
+):
 
     try:
 
@@ -206,14 +313,22 @@ def calculate_position_size(request: PositionSizeRequest):
         ) from error
 
 @app.post("/api/ai/chat")
-def ai_chat(request: AIChatRequest):
+def ai_chat(
+    request: AIChatRequest,
+    user: dict = Depends(get_current_user),
+):
 
     try:
         return process_chat_message(
             message=request.message,
             session_id=request.session_id,
+            user_id=user["id"],
         )
-
+    except PermissionError:
+        raise HTTPException(
+            status_code=404,
+            detail="AI session not found.",
+        )
     except ValueError as error:
         raise HTTPException(
             status_code=422,
@@ -228,18 +343,31 @@ def ai_chat(request: AIChatRequest):
 
 
 @app.post("/api/ai/reset/{session_id}")
-def ai_reset(session_id: str):
+def ai_reset(
+    session_id: str,
+    user: dict = Depends(get_current_user),
+):
+    reset_success = reset_session(
+        session_id=session_id,
+        user_id=user["id"],
+    )
 
-    reset_session(session_id)
+    if not reset_success:
+        raise HTTPException(
+            status_code=404,
+            detail="AI session not found.",
+        )
 
     return {
         "success": True,
         "message": "AI conversation reset.",
     }
 
-
 @app.post("/api/backtests/prepare")
-def prepare_backtest(request: BacktestPrepareRequest):
+def prepare_backtest(
+    request: BacktestPrepareRequest,
+    user: dict = Depends(get_current_user),
+):
     """
     Interpret a natural-language request and validate its
     strategy configuration. This endpoint does NOT run a backtest.
@@ -296,7 +424,10 @@ def prepare_backtest(request: BacktestPrepareRequest):
 
 
 @app.post("/api/backtests/start")
-def begin_backtest(request: BacktestStartRequest):
+def begin_backtest(
+    request: BacktestStartRequest,
+    user: dict = Depends(get_current_user),
+):
     """
     Start a confirmed backtest in the background.
     """
@@ -304,7 +435,10 @@ def begin_backtest(request: BacktestStartRequest):
         # Always validate again at the execution boundary.
         validated_config = validate_strategy(request.config)
 
-        job = start_backtest(validated_config)
+        job = start_backtest(
+            validated_config,
+            user["id"],
+        )
 
         return {
             "message": "Backtest execution accepted.",
@@ -317,13 +451,31 @@ def begin_backtest(request: BacktestStartRequest):
             detail=str(error),
         ) from error
 
+@app.get("/api/backtests")
+def list_backtests(
+    user: dict = Depends(get_current_user),
+):
+    """
+    Retrieve all backtest runs, newest first.
+    """
+    jobs = get_all_backtests(user["id"])
 
+    return {
+        "total": len(jobs),
+        "jobs": jobs,
+    }
 @app.get("/api/backtests/{run_id}")
-def backtest_status(run_id: str):
+def backtest_status(
+    run_id: str,
+    user: dict = Depends(get_current_user),
+):
     """
     Retrieve execution status or the completed backtest report.
     """
-    job = get_backtest(run_id)
+    job = get_backtest(
+        run_id,
+        user["id"],
+    )
 
     if job is None:
         raise HTTPException(

@@ -960,3 +960,403 @@
     font-size: 19px;
   }
 }
+
+/* ========================================
+   SIDEBAR VISUAL REFINEMENTS
+======================================== */
+
+/* Sidebar depth and spacing */
+.sidebar {
+  padding: 25px 16px 17px;
+  box-shadow: 8px 0 30px rgba(0, 0, 0, 0.12);
+}
+
+/* Brand spacing */
+.brand {
+  padding-bottom: 32px;
+}
+
+.brand-mark {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.brand:hover .brand-mark {
+  transform: translateY(-2px);
+  box-shadow: 0 5px 18px rgba(53, 211, 161, 0.2);
+}
+
+/* Workspace heading */
+.workspace-label {
+  margin-top: 2px;
+  padding-bottom: 14px;
+  font-weight: 700;
+}
+
+/* Navigation spacing */
+.nav-list {
+  gap: 7px;
+}
+
+.nav-item {
+  position: relative;
+  min-height: 44px;
+  font-weight: 500;
+  transition:
+    color 0.2s ease,
+    background 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.nav-item svg {
+  flex-shrink: 0;
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+
+/* Hover effect */
+.nav-item:hover {
+  color: #eaf5f1;
+  background: #151f2b;
+  transform: translateX(2px);
+}
+
+.nav-item:hover svg {
+  color: #45d8aa;
+}
+
+/* Active navigation */
+.nav-item.active {
+  color: #45d8aa;
+  background: rgba(53, 211, 161, 0.10);
+  border-color: rgba(53, 211, 161, 0.22);
+  box-shadow: inset 3px 0 0 #35d3a1;
+  font-weight: 600;
+}
+
+.nav-item.active svg {
+  color: #45d8aa;
+}
+
+/* Home navigation separation */
+.home-nav-item {
+  margin-bottom: 19px;
+  min-height: 44px;
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.home-nav-item:hover {
+  background: rgba(53, 211, 161, 0.08);
+}
+
+/* Keyboard accessibility */
+.nav-item:focus-visible {
+  outline: 2px solid #45d8aa;
+  outline-offset: 3px;
+}
+
+/* Bottom section */
+.sidebar-bottom {
+  padding-top: 12px;
+  border-top: 1px solid #1c2532;
+}
+
+.system-status {
+  transition: border-color 0.2s ease;
+}
+
+.system-status:hover {
+  border-color: rgba(53, 211, 161, 0.3);
+}
+
+/* Mobile sidebar adjustments */
+@media (max-width: 760px) {
+  .sidebar {
+    padding: 15px;
+    box-shadow: 0 5px 20px rgba(0, 0, 0, 0.15);
+  }
+
+  .brand {
+    padding-bottom: 17px;
+  }
+
+  .home-nav-item {
+    margin-bottom: 10px;
+    min-height: 37px;
+  }
+
+  .nav-list {
+    gap: 6px;
+  }
+
+  .nav-item:hover {
+    transform: none;
+  }
+
+  .nav-item.active {
+    box-shadow: inset 0 -2px 0 #35d3a1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-item,
+  .nav-item svg,
+  .brand-mark {
+    transition: none;
+  }
+
+  .nav-item:hover,
+  .brand:hover .brand-mark {
+    transform: none;
+  }
+}
+
+
+/* ========================================
+   DASHBOARD VISUAL REFINEMENTS
+======================================== */
+
+/* Dashboard heading */
+.page-heading {
+  margin-bottom: 29px;
+}
+
+.page-heading h1 {
+  letter-spacing: -1px;
+}
+
+.page-heading p {
+  line-height: 1.6;
+}
+
+/* Summary cards */
+.stat-card {
+  position: relative;
+  overflow: hidden;
+  border-color: #263242;
+  background: linear-gradient(145deg, #121c29, #101722);
+  transition:
+    transform 0.22s ease,
+    border-color 0.22s ease,
+    box-shadow 0.22s ease;
+}
+
+.stat-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(53, 211, 161, 0.32);
+  box-shadow: 0 9px 24px rgba(0, 0, 0, 0.2);
+}
+
+.stat-icon {
+  transition: transform 0.2s ease;
+}
+
+.stat-card:hover .stat-icon {
+  transform: scale(1.08);
+}
+
+.stat-value {
+  font-size: 24px;
+  letter-spacing: -1px;
+}
+
+/* Dashboard panels */
+.panel {
+  border-color: #263242;
+  background: linear-gradient(145deg, #111b28, #101722);
+  transition: border-color 0.2s ease;
+}
+
+.panel:hover {
+  border-color: #334355;
+}
+
+.panel-title {
+  font-size: 13px;
+  letter-spacing: 0.1px;
+}
+
+/* Chart presentation */
+.chart-panel {
+  overflow: hidden;
+}
+
+.chart-balance {
+  letter-spacing: -1px;
+}
+
+.timeframe-switch {
+  border: 1px solid #202b39;
+}
+
+.timeframe-switch button {
+  transition: color 0.18s ease, background 0.18s ease;
+}
+
+.timeframe-switch button:hover {
+  color: #e5ebf3;
+  background: #172331;
+}
+
+.timeframe-switch button.selected {
+  color: #45d8aa;
+  background: #1b302e;
+}
+
+/* Watchlist */
+.coin-row {
+  padding: 0 7px;
+  border-radius: 6px;
+  transition: background 0.2s ease;
+}
+
+.coin-row:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.coin-icon {
+  transition: transform 0.2s ease;
+}
+
+.coin-row:hover .coin-icon {
+  transform: scale(1.08);
+}
+
+.coin-price strong {
+  font-size: 11px;
+}
+
+/* Activity table */
+.activity-table th {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.activity-table tbody tr {
+  transition: background 0.18s ease;
+}
+
+.activity-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.activity-table td {
+  padding-top: 15px;
+  padding-bottom: 15px;
+}
+
+.trade-type {
+  font-weight: 600;
+}
+
+/* Dashboard buttons */
+.date-button {
+  cursor: pointer;
+  transition:
+    border-color 0.2s ease,
+    background 0.2s ease;
+}
+
+.date-button:hover {
+  border-color: #45d8aa;
+  background: #15222b;
+}
+
+.text-button {
+  transition: color 0.2s ease;
+}
+
+.date-button:focus-visible,
+.text-button:focus-visible,
+.timeframe-switch button:focus-visible {
+  outline: 2px solid #45d8aa;
+  outline-offset: 3px;
+}
+
+/* Responsive refinements */
+@media (max-width: 1150px) {
+  .stat-card {
+    padding: 16px;
+  }
+}
+
+@media (max-width: 760px) {
+  .page-heading {
+    margin-bottom: 21px;
+  }
+
+  .stat-card:hover,
+  .panel:hover {
+    transform: none;
+  }
+
+  .chart-balance {
+    font-size: 20px;
+  }
+
+  .chart-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .activity-table th,
+  .activity-table td {
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stat-card,
+  .stat-icon,
+  .coin-row,
+  .coin-icon,
+  .panel,
+  .timeframe-switch button,
+  .date-button,
+  .text-button {
+    transition: none;
+  }
+
+  .stat-card:hover,
+  .stat-card:hover .stat-icon,
+  .coin-row:hover .coin-icon {
+    transform: none;
+  }
+}
+
+/* Authentication profile */
+.avatar,
+.top-avatar {
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.profile-logout {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 7px;
+  border-radius: 8px;
+}
+
+.profile-logout:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.auth-loading-screen {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #0b1120;
+  color: white;
+}
+
+.auth-loading-screen p {
+  color: #94a3b8;
+}

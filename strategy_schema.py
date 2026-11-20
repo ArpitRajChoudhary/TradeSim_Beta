@@ -1,6 +1,11 @@
+
 import math
 from typing import Any
-from typing import Any
+
+from indicators import (
+    validate_indicator_definition,
+    validate_indicator_output,
+)
 
 
 SUPPORTED_OPERATORS = {
@@ -24,7 +29,6 @@ SUPPORTED_SOURCES = {
     "constant",
     "volume",
 }
-
 
 
 def validate_operand(operand: dict[str, Any]) -> None:
@@ -62,8 +66,6 @@ def validate_operand(operand: dict[str, Any]) -> None:
             )
 
     elif source == "volume":
-        # Volume directly resolves to the candle's volume value.
-        # No additional field or parameter is required.
         pass
 
 
@@ -120,25 +122,31 @@ def validate_strategy_schema(strategy: dict[str, Any]) -> None:
         raise ValueError("Indicators must be a list.")
 
     indicator_ids = set()
+    indicator_types = {}
 
+    # Validate each indicator using the central capability registry.
     for indicator in strategy["indicators"]:
         if not isinstance(indicator, dict):
             raise ValueError("Invalid indicator definition.")
 
         indicator_id = indicator.get("id")
 
-        if not indicator_id or indicator_id in indicator_ids:
+        if (
+            not isinstance(indicator_id, str)
+            or not indicator_id.strip()
+            or indicator_id in indicator_ids
+        ):
             raise ValueError("Missing or duplicate indicator id.")
 
-        if not isinstance(indicator.get("parameters"), dict):
-            raise ValueError("Indicator parameters must be an object.")
+        validate_indicator_definition(indicator)
 
         indicator_ids.add(indicator_id)
+        indicator_types[indicator_id] = indicator["type"].lower()
 
     validate_condition_group(strategy["entry"])
     validate_condition_group(strategy["exit"])
 
-    # Verify that every referenced indicator exists.
+    # Verify indicator references and their supported outputs.
     for group_name in ("entry", "exit"):
         group = strategy[group_name]
 
@@ -146,10 +154,15 @@ def validate_strategy_schema(strategy: dict[str, Any]) -> None:
             for side in ("left", "right"):
                 operand = condition[side]
 
-                if (
-                    operand["source"] == "indicator"
-                    and operand["id"] not in indicator_ids
-                ):
-                    raise ValueError(
-                        f"Undefined indicator: {operand['id']}"
+                if operand["source"] == "indicator":
+                    indicator_id = operand["id"]
+
+                    if indicator_id not in indicator_ids:
+                        raise ValueError(
+                            f"Undefined indicator: {indicator_id}"
+                        )
+
+                    validate_indicator_output(
+                        indicator_types[indicator_id],
+                        operand["output"],
                     )

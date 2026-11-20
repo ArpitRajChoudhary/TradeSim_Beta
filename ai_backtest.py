@@ -3,12 +3,13 @@ import os
 import json
 import math
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-from backtest_data import load_candles
+from backtest_data import load_candles, download_binance_candles
 from strategies import SmaCrossStrategy
 from generic_strategy import ConditionBasedStrategy
 from backtest_engine import BacktestEngine
@@ -149,6 +150,8 @@ PORTFOLIO AND EXECUTION PARAMETERS:
 - slippage_bps (basis points)
 - stop_loss_percentage
 - take_profit_percentage
+- start_date (YYYY-MM-DD)
+- end_date (YYYY-MM-DD)
 
 DEFAULT RULES:
 
@@ -164,7 +167,13 @@ DEFAULT RULES:
 10. Return missing_information when essential information
     is unavailable.
 11. Set needs_clarification to true when clarification is needed.
-12. Explain the interpreted strategy in user_explanation.
+12. Extract the requested backtesting start date.
+13. Extract the requested backtesting end date.
+14. Dates must use YYYY-MM-DD format.
+15. Do not invent missing dates.
+16. If either date is missing, request clarification.
+17. The end date must not be earlier than the start date.
+18. Explain the interpreted strategy in user_explanation.
 
 STRATEGY OUTPUT RULES:
 
@@ -360,6 +369,14 @@ response_schema = {
         "user_explanation": {
             "type": "STRING",
         },
+        "start_date": {
+            "type": "STRING",
+            "nullable": True,
+        },
+        "end_date": {
+            "type": "STRING",
+            "nullable": True,
+        },
     },
     "required": [
         "asset",
@@ -381,6 +398,8 @@ response_schema = {
         "needs_clarification",
         "clarification_question",
         "user_explanation",
+        "start_date",
+        "end_date",
     ],
 }
 
@@ -513,31 +532,53 @@ def validate_strategy(config):
         raise ValueError(
             "Only the 1-hour timeframe is currently supported."
         )
-
+        # --------------------------------------------------
+    # BACKTEST DATE VALIDATION
+    # Dates are optional for strategy-only validation
+    # and legacy tests. Date-based backtests require both.
     # --------------------------------------------------
-    # 4. STRATEGY TYPE VALIDATION
-    # --------------------------------------------------
 
-    strategy_type = config.get("strategy_type")
+    start_date = config.get("start_date")
+    end_date = config.get("end_date")
 
-    if strategy_type not in {
-        "sma_crossover",
-        "condition_based",
-    }:
+    if (start_date is None) != (end_date is None):
         raise ValueError(
-            f"Unsupported strategy type: {strategy_type}"
+            "Both backtesting start date and end date are required."
         )
 
-    fast_period = None
-    slow_period = None
-    indicators = []
-    entry = None
-    exit = None
+    if start_date is not None:
+        try:
+            parsed_start_date = datetime.strptime(
+                start_date, "%Y-%m-%d"
+            ).date()
 
+            parsed_end_date = datetime.strptime(
+                end_date, "%Y-%m-%d"
+            ).date()
+
+        except (ValueError, TypeError):
+            raise ValueError(
+                "Backtesting dates must use YYYY-MM-DD format."
+            )
+
+        if parsed_start_date > parsed_end_date:
+            raise ValueError(
+                "Backtesting start date cannot be after end date."
+            )
+    strategy_type = config.get("strategy_type")
+
+    if not isinstance(strategy_type, str):
+        raise ValueError("Please specify a valid strategy type.")
+
+    strategy_type = strategy_type.strip().lower()
     # --------------------------------------------------
     # 5. SMA CROSSOVER VALIDATION
     # --------------------------------------------------
-
+    fast_period = None
+    slow_period = None
+    indicators = None
+    entry = None
+    exit = None
     if strategy_type == "sma_crossover":
 
         fast_period = config.get("fast_period")
@@ -577,64 +618,16 @@ def validate_strategy(config):
         entry = config["entry"]
         exit = config["exit"]
 
-        if not indicators:
-            raise ValueError(
-                "At least one indicator is required."
-            )
+        # if not indicators:
+        #     raise ValueError(
+        #         "At least one indicator is required."
+        #     )
 
         if entry is None or exit is None:
             raise ValueError(
                 "Both entry and exit conditions are required."
             )
 
-        supported_indicators = {"sma", "ema", "rsi"}
-
-        for indicator in indicators:
-
-            indicator_type = indicator.get("type")
-
-            if indicator_type not in supported_indicators:
-                raise ValueError(
-                    f"Unsupported indicator: {indicator_type}"
-                )
-
-            parameters = indicator["parameters"]
-
-            if set(parameters.keys()) != {"period"}:
-                raise ValueError(
-                    f"Unsupported parameters for {indicator_type}. "
-                    "Only period is currently supported."
-                )
-
-            period = parameters.get("period")
-
-            if (
-                isinstance(period, bool)
-                or not isinstance(period, int)
-                or period <= 0
-            ):
-                raise ValueError(
-                    f"{indicator_type} period must be a "
-                    "positive integer."
-                )
-
-        # Currently every registered indicator returns "value".
-        # Reject unknown outputs instead of silently ignoring them.
-        for group in (entry, exit):
-
-            for condition in group["conditions"]:
-
-                for side in ("left", "right"):
-
-                    operand = condition[side]
-
-                    if operand["source"] == "indicator":
-
-                        if operand["output"] != "value":
-                            raise ValueError(
-                                "Unsupported indicator output: "
-                                f"{operand['output']}"
-                            )
 
     # --------------------------------------------------
     # 7. STOP-LOSS AND TAKE-PROFIT VALIDATION
@@ -705,6 +698,8 @@ def validate_strategy(config):
         "asset": asset,
         "market_type": market_type,
         "timeframe": timeframe,
+        "start_date": start_date,
+        "end_date": end_date,
         "strategy_type": strategy_type,
 
         "fast_period": fast_period,
@@ -729,56 +724,27 @@ def validate_strategy(config):
 
 
 
+
 def run_ai_backtest(config, generate_report=True):
     """
-    Execute the validated backtest.
+    Execute a date-bounded historical backtest.
 
-    Execution duration measures only BacktestEngine.run(),
-    not AI interpretation or report generation.
+    Downloads warm-up candles before the requested start date
+    so indicators have sufficient historical data.
     """
     import time
 
-    if not DATASET_PATH.exists():
-        raise FileNotFoundError(
-            f"Historical dataset not found: {DATASET_PATH}"
-        )
-
-    candles = load_candles(DATASET_PATH)
-
-    # Select the strategy and validate its required history.
+    # 1. Determine the strategy's required indicator history.
     if config["strategy_type"] == "sma_crossover":
-
         required_period = config["slow_period"]
 
-        if len(candles) <= required_period + 1:
-            raise ValueError(
-                "Not enough historical candles for the selected "
-                "slow SMA period."
-            )
-
-        strategy = SmaCrossStrategy(
-            fast_period=config["fast_period"],
-            slow_period=config["slow_period"],
-        )
-
     elif config["strategy_type"] == "condition_based":
-
-        indicators = config["indicators"]
-
         required_period = max(
-            indicator["parameters"]["period"]
-            for indicator in indicators
-        )
-
-        if len(candles) <= required_period:
-            raise ValueError(
-                "Not enough historical candles for the selected "
-                "indicator periods."
-            )
-
-        strategy = ConditionBasedStrategy(
-            candles=candles,
-            specification=config,
+            (
+                indicator["parameters"]["period"]
+                for indicator in config["indicators"]
+            ),
+            default=0,
         )
 
     else:
@@ -786,7 +752,122 @@ def run_ai_backtest(config, generate_report=True):
             f"Unsupported strategy type: {config['strategy_type']}"
         )
 
-    # Create the existing backtest engine.
+    # 2. Read and validate requested dates.
+    start_date = config.get("start_date")
+    end_date = config.get("end_date")
+
+    if (start_date is None) != (end_date is None):
+        raise ValueError(
+            "Both backtesting start date and end date are required."
+        )
+
+    # Default values for legacy backtests.
+    start_index = None
+    warmup_candles = 0
+
+    # 3. Load candles according to the selected workflow.
+    if start_date is None:
+
+        # Legacy workflow: use the existing historical dataset.
+        dataset_path = DATASET_PATH
+        candles = load_candles(dataset_path)
+
+    else:
+
+        # Date-based workflow: validate dates.
+        try:
+            start_datetime = datetime.strptime(
+                start_date, "%Y-%m-%d"
+            ).replace(tzinfo=timezone.utc)
+
+            end_datetime = datetime.strptime(
+                end_date, "%Y-%m-%d"
+            )
+
+        except (ValueError, TypeError):
+            raise ValueError(
+                "Backtesting dates must use YYYY-MM-DD format."
+            )
+
+        if start_datetime.date() > end_datetime.date():
+            raise ValueError(
+                "Backtesting start date cannot be after end date."
+            )
+
+        # 4. Download enough previous candles for indicator warm-up.
+        warmup_days = max(
+            1,
+            (required_period + 1 + 23) // 24
+        )
+
+        warmup_start_date = (
+            start_datetime - timedelta(days=warmup_days)
+        ).strftime("%Y-%m-%d")
+
+        dataset_path = (
+            DATASET_PATH.parent
+            / "generated"
+            / (
+                f"{config['asset']}_{config['timeframe']}_"
+                f"{start_date}_{end_date}.csv"
+            )
+        )
+
+        download_binance_candles(
+            start_date=warmup_start_date,
+            end_date=end_date,
+            output_path=dataset_path,
+            symbol=config["asset"],
+            interval=config["timeframe"],
+        )
+
+        candles = load_candles(dataset_path)
+
+        # 5. Find the first candle in the requested period.
+        start_timestamp = int(
+            start_datetime.timestamp() * 1000
+        )
+
+        start_index = next(
+            (
+                index
+                for index, candle in enumerate(candles)
+                if candle.open_time >= start_timestamp
+            ),
+            None,
+        )
+
+        if start_index is None:
+            raise ValueError(
+                "No candles found for the requested backtesting start date."
+            )
+
+        if start_index <= required_period:
+            raise ValueError(
+                "Not enough warm-up candles for the selected indicator periods."
+            )
+
+        if len(candles) - start_index < 2:
+            raise ValueError(
+                "Not enough candles in the requested backtesting period."
+            )
+
+        warmup_candles = start_index
+    # 6. Create the selected strategy.
+    if config["strategy_type"] == "sma_crossover":
+
+        strategy = SmaCrossStrategy(
+            fast_period=config["fast_period"],
+            slow_period=config["slow_period"],
+        )
+
+    else:
+        strategy = ConditionBasedStrategy(
+            candles=candles,
+            specification=config,
+        )
+
+    # 7. Create the existing backtest engine.
     engine = BacktestEngine(
         initial_capital=str(config["initial_capital"]),
         quote_per_trade=str(config["quote_per_trade"]),
@@ -802,24 +883,37 @@ def run_ai_backtest(config, generate_report=True):
         ),
     )
 
-    # Measure actual Python backtest engine execution.
+    # 8. Run only over the requested period.
     start_time = time.perf_counter()
 
-    results = engine.run(
-        candles=candles,
-        strategy=strategy,
-    )
+    if start_index is None:
+        results = engine.run(
+            candles=candles,
+            strategy=strategy,
+        )
+    else:
+        results = engine.run(
+            candles=candles,
+            strategy=strategy,
+            start_index=start_index,
+        )
 
     execution_time = time.perf_counter() - start_time
 
+    # 9. Generate the existing report.
     if generate_report:
         generate_backtest_report(results)
 
     return {
         "results": results,
         "execution_time_seconds": round(execution_time, 6),
-        "candles_processed": len(candles),
-        "dataset": DATASET_PATH.name,
+        "candles_processed": (
+            len(candles)
+            if start_index is None
+            else len(candles) - start_index
+        ),
+        "warmup_candles": warmup_candles,
+        "dataset": dataset_path.name,
     }
 
 # --------------------------------------------------

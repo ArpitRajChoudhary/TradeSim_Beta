@@ -92,11 +92,28 @@ class BacktestEngine:
                 "Take-profit percentage must be greater than zero."
             )
 
-    def run(self, candles, strategy):
+    def run(self, candles, strategy, start_index=None):
         if len(candles) < 2:
             raise ValueError(
                 "At least two candles are required."
             )
+                # Preserve existing behavior unless a backtest start index is supplied.
+        if start_index is None:
+            baseline_index = 0
+            first_loop_index = 1
+
+        else:
+            if (
+                not isinstance(start_index, int)
+                or start_index < 1
+                or start_index >= len(candles) - 1
+            ):
+                raise ValueError(
+                    "Invalid backtest start index or insufficient candles."
+                )
+
+            baseline_index = start_index
+            first_loop_index = start_index
 
         cash = self.initial_capital
         position = None
@@ -105,10 +122,9 @@ class BacktestEngine:
         ignored_signals = []
 
         equity_curve = [{
-            "time": candles[0].open_time,
+            "time": candles[baseline_index].open_time,
             "equity": str(self.initial_capital),
         }]
-
         peak_equity = self.initial_capital
         max_drawdown = Decimal("0")
 
@@ -213,7 +229,7 @@ class BacktestEngine:
                     apply_slippage=False,
                 )
 
-        for index in range(1, len(candles)):
+        for index in range(first_loop_index, len(candles)):
             candle = candles[index]
 
             open_price = _d(

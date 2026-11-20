@@ -12,6 +12,7 @@ import {
   ChevronRight,
 } from 'lucide-react'
 import './LandingPage.css'
+import GoogleSignInButton from './GoogleSignInButton'
 
 const features = [
   {
@@ -58,7 +59,7 @@ const features = [
   },
 ]
 
-function LandingPage({ onLaunch }) {
+function LandingPage({ onLaunch, user, onLoginSuccess }) {
   return (
     <div className="landing-page">
       <div className="landing-glow landing-glow-one" />
@@ -125,6 +126,21 @@ function LandingPage({ onLaunch }) {
                 Explore features <ChevronRight size={17} />
               </a>
             </div>
+
+<div className="landing-auth-area" id="google-signin">
+  {user ? (
+    <p className="landing-auth-message">
+      Signed in as <strong>{user.name}</strong>
+    </p>
+  ) : (
+    <>
+      <p className="landing-auth-message">
+        Sign in to access your personal trading workspace
+      </p>
+      <GoogleSignInButton onSuccess={onLoginSuccess} />
+    </>
+  )}
+</div>
 
             <div className="landing-trust-line">
               <ShieldCheck size={16} />

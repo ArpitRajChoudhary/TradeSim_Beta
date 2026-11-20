@@ -142,8 +142,20 @@ INDICATOR_REGISTRY = {
 # Indicator validation and execution
 # --------------------------------------------------
 
-def calculate_indicator(candles, indicator_type, parameters):
-    indicator_type = indicator_type.lower()
+def validate_indicator_definition(indicator):
+    """
+    Validate an indicator against the registry capabilities.
+    """
+
+    if not isinstance(indicator, dict):
+        raise ValueError("Indicator definition must be an object.")
+
+    indicator_type = indicator.get("type")
+
+    if not isinstance(indicator_type, str):
+        raise ValueError("Indicator type must be a string.")
+
+    indicator_type = indicator_type.strip().lower()
 
     if indicator_type not in INDICATOR_REGISTRY:
         raise ValueError(
@@ -152,14 +164,64 @@ def calculate_indicator(candles, indicator_type, parameters):
 
     definition = INDICATOR_REGISTRY[indicator_type]
 
+    parameters = indicator.get("parameters")
+
     if not isinstance(parameters, dict):
         raise ValueError("Indicator parameters must be an object.")
 
     if set(parameters.keys()) != definition["parameters"]:
         raise ValueError(
-            f"{indicator_type.upper()} requires exactly these parameters: "
-            f"{', '.join(sorted(definition['parameters']))}"
+            f"{indicator_type.upper()} requires exactly these "
+            f"parameters: {', '.join(sorted(definition['parameters']))}"
         )
+
+    for parameter_name, parameter_value in parameters.items():
+        if parameter_name == "period":
+            if (
+                isinstance(parameter_value, bool)
+                or not isinstance(parameter_value, int)
+                or parameter_value <= 0
+            ):
+                raise ValueError(
+                    f"{indicator_type.upper()} period must be "
+                    "a positive integer."
+                )
+
+    return indicator_type
+
+
+def validate_indicator_output(indicator_type, output):
+    """
+    Verify that an indicator supports the requested output.
+    """
+
+    if not isinstance(indicator_type, str):
+        raise ValueError("Indicator type must be a string.")
+
+    indicator_type = indicator_type.strip().lower()
+
+    if indicator_type not in INDICATOR_REGISTRY:
+        raise ValueError(
+            f"Unsupported indicator: {indicator_type}"
+        )
+
+    supported_outputs = INDICATOR_REGISTRY[indicator_type]["outputs"]
+
+    if output not in supported_outputs:
+        raise ValueError(
+            f"Unsupported output '{output}' for "
+            f"{indicator_type.upper()}. "
+            f"Supported outputs: {', '.join(sorted(supported_outputs))}"
+        )
+
+
+def calculate_indicator(candles, indicator_type, parameters):
+    indicator_type = validate_indicator_definition({
+        "type": indicator_type,
+        "parameters": parameters,
+    })
+
+    definition = INDICATOR_REGISTRY[indicator_type]
 
     return definition["calculate"](
         candles,

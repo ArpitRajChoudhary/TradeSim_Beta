@@ -1,6 +1,7 @@
 import json
 import os
 import uuid
+import re
 
 from decimal import Decimal
 
@@ -91,6 +92,41 @@ USER EXPLANATION:
 - Do not promise profits or guarantee protection.
 """
 
+CONVERSATIONAL_SYSTEM_PROMPT = """
+You are TradeSim, a knowledgeable and helpful AI assistant
+inside a trading simulation application.
+
+YOUR ROLE:
+- Explain trading concepts clearly.
+- Help users understand trading strategies and indicators.
+- Explain Spot and Futures trading.
+- Explain position sizing, leverage, fees, risk, and stop-loss.
+- Answer questions about the TradeSim application.
+- Maintain context from previous messages.
+- Ask follow-up questions when the user's request is unclear.
+
+RESPONSE STYLE:
+- Be conversational, natural, and helpful.
+- Give explanations appropriate for a beginner.
+- Use headings and bullet points when they improve readability.
+- Explain technical terms rather than assuming the user knows them.
+- Avoid unnecessarily short or generic answers.
+- Give examples when they help explain a concept.
+- Answer the actual question instead of repeating generic disclaimers.
+
+TRADING SAFETY:
+- Never guarantee profits.
+- Never claim a trade has been executed.
+- Never invent live market prices or calculation results.
+- Never present estimates as verified calculations.
+- Do not make unsupported buy or sell recommendations.
+
+IMPORTANT:
+- You are responsible for explanations, not financial calculations.
+- Python performs all authoritative trading calculations.
+- If a user requests a calculation, explain that the required
+  trading details must be provided to the calculation workflow.
+"""
 
 RESPONSE_SCHEMA = {
     "type": "OBJECT",
@@ -213,12 +249,13 @@ def get_gemini_client():
     return genai.Client(api_key=api_key)
 
 
-def create_session():
-    """Create an independent Gemini conversation and trading state."""
+
+def create_session(user_id):
+    """Create an AI conversation owned by one authenticated user."""
 
     client = get_gemini_client()
 
-    chat = client.chats.create(
+    trading_chat = client.chats.create(
         model=MODEL,
         config=types.GenerateContentConfig(
             system_instruction=SYSTEM_PROMPT,
@@ -228,30 +265,57 @@ def create_session():
         ),
     )
 
+    assistant_chat = client.chats.create(
+        model=MODEL,
+        config=types.GenerateContentConfig(
+            system_instruction=CONVERSATIONAL_SYSTEM_PROMPT,
+            temperature=0.6,
+        ),
+    )
+
     session_id = str(uuid.uuid4())
 
     SESSIONS[session_id] = {
+        "user_id": user_id,
         "client": client,
-        "chat": chat,
+        "trading_chat": trading_chat,
+        "assistant_chat": assistant_chat,
         "state": create_empty_state(),
     }
 
     return session_id
 
 
-def get_session(session_id=None):
-    if session_id and session_id in SESSIONS:
-        return session_id, SESSIONS[session_id]
+def get_session(session_id=None, user_id=None):
+    """Retrieve a conversation only if it belongs to the user."""
 
-    new_session_id = create_session()
+    if not user_id:
+        raise ValueError("Authenticated user ID is required.")
+
+    if session_id and session_id in SESSIONS:
+        session = SESSIONS[session_id]
+
+        if session.get("user_id") != user_id:
+            raise PermissionError("AI session not found.")
+
+        return session_id, session
+
+    new_session_id = create_session(user_id)
 
     return new_session_id, SESSIONS[new_session_id]
 
 
-def reset_session(session_id):
-    """Reset one conversation without affecting other sessions."""
+def reset_session(session_id, user_id):
+    """Delete a conversation only if it belongs to the user."""
+
+    session = SESSIONS.get(session_id)
+
+    if session is None or session.get("user_id") != user_id:
+        return False
 
     SESSIONS.pop(session_id, None)
+
+    return True
 
 
 def normalize_currency(currency):
@@ -486,16 +550,90 @@ Verified Python results:
         )
 
 
-def process_chat_message(message, session_id=None):
+def is_explanation_only_request(message):
+    """Identify explanation requests that should bypass execution validation."""
+
+    asks_for_explanation = re.search(
+        r"\b(explain|describe|what is|what are|how does|how do|"
+        r"advantages|disadvantages|pros and cons)\b",
+        message,
+        re.IGNORECASE,
+    )
+
+    requests_execution = re.search(
+        r"\b(run|perform|execute|start|launch)\s+(?:a\s+)?"
+        r"(backtest|back-testing|historical test|calculation)\b"
+        r"|\b(calculate position size|calculate trade size)\b",
+        message,
+        re.IGNORECASE,
+    )
+
+    return bool(asks_for_explanation and not requests_execution)
+
+def process_chat_message(message, session_id=None, user_id=None):
     """Main entry point used by the FastAPI chat endpoint."""
 
     if not isinstance(message, str) or not message.strip():
         raise ValueError("Message cannot be empty.")
 
-    session_id, session = get_session(session_id)
+    session_id, session = get_session(
+        session_id=session_id,
+        user_id=user_id,
+    )
 
-    chat = session["chat"]
+    trading_chat = session["trading_chat"]
+    assistant_chat = session["assistant_chat"]
     current_state = session["state"]
+
+    # Explanation-only requests bypass structured trading validation.
+    if is_explanation_only_request(message):
+        try:
+            assistant_response = assistant_chat.send_message(
+                f"""
+Current authoritative trading state:
+{json.dumps(current_state, indent=2, default=str)}
+
+User message:
+{message}
+
+Explain the requested trading concept clearly.
+You may explain indicators and strategies even if they
+are not supported by the Python backtest engine.
+
+Important:
+- Do not perform a backtest.
+- Do not perform financial calculations.
+- Do not claim that a strategy has been executed.
+- Explain any limitations only when relevant.
+"""
+            )
+
+            explanation = (
+                assistant_response.text
+                or "I couldn't generate a response. Please try again."
+            )
+
+        except Exception as error:
+            print(f"Conversational AI error: {error}")
+            explanation = (
+                "I'm having trouble generating a response right now. "
+                "Please try again in a moment."
+            )
+
+        return {
+            "session_id": session_id,
+            "intent": "explain",
+            "user_explanation": explanation,
+            "needs_clarification": False,
+            "clarification_question": None,
+            "missing_information": [],
+            "state": current_state,
+            "state_message": "Explanation only. Trading state unchanged.",
+            "calculation": None,
+            "calculation_error": None,
+            "ai_explanation": None,
+        }
+
 
     context = f"""
 CURRENT AUTHORITATIVE TRADING STATE:
@@ -508,7 +646,7 @@ Interpret this message using the current state.
 Return only the structured JSON response.
 """
 
-    response = chat.send_message(context)
+    response = trading_chat.send_message(context)
 
     try:
         interpretation = json.loads(response.text)
@@ -528,7 +666,7 @@ Return only the structured JSON response.
     else:
         # Do not retain a rejected Gemini proposal in conversation history.
         # Recreate the chat with the authoritative state.
-        session["chat"] = session["client"].chats.create(
+        session["trading_chat"] = session["client"].chats.create(
             model=MODEL,
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
@@ -551,6 +689,35 @@ Return only the structured JSON response.
     calculation = None
     calculation_error = None
     ai_explanation = None
+        # Generate natural-language responses for ordinary conversations.
+    if interpretation.get("intent") in ("explain", "other"):
+        try:
+            assistant_response = assistant_chat.send_message(
+                f"""
+Current authoritative trading state:
+{json.dumps(state, indent=2, default=str)}
+
+User message:
+{message}
+
+Respond naturally to the user's message.
+Do not modify trading state.
+Do not invent calculations or market data.
+"""
+            )
+
+            interpretation["user_explanation"] = (
+                assistant_response.text
+                or "I couldn't generate a response. Please try again."
+            )
+
+        except Exception as error:
+            print(f"Conversational AI error: {error}")
+
+            interpretation["user_explanation"] = (
+                "I'm having trouble generating a response right now. "
+                "Please try again in a moment."
+            )
 
     # Calculate only when the user explicitly requests position sizing.
     if (
